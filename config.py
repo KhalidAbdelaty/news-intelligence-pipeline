@@ -1,7 +1,3 @@
-"""
-Enhanced configuration for news pipeline
-Cloud deployment, monitoring, and production settings
-"""
 
 import os
 import logging
@@ -12,7 +8,7 @@ ENVIRONMENT = os.getenv('ENVIRONMENT', 'development')
 DEBUG = os.getenv('DEBUG', 'true').lower() == 'true'
 
 # API Configuration
-API_KEY = os.getenv('GNEWS_API_KEY', "86ce66a3c06ea6a6a4a6fa14e290f092")
+API_KEY = os.getenv('GNEWS_API_KEY', "your_api")
 BASE_URL = "https://gnews.io/api/v4"
 
 # Database Configuration - Cloud Support
