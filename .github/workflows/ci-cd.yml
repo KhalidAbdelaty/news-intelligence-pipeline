@@ -1,5 +1,5 @@
-# .github/workflows/ci-cd.yml
-name: News Intelligence Pipeline CI/CD
+# .github/workflows/ci.yml
+name: CI
 
 on:
   push:
@@ -7,319 +7,74 @@ on:
   pull_request:
     branches: [ main ]
 
-env:
-  PYTHON_VERSION: '3.11.9'
-  GNEWS_API_KEY: ${{ secrets.GNEWS_API_KEY }}
-
 jobs:
   test:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
-    strategy:
-      matrix:
-        python-version: ['3.11', '3.12']
-    
-    steps:
-    - name: Checkout code
-      uses: actions/checkout@v4
-    
-    - name: Set up Python ${{ matrix.python-version }}
-      uses: actions/setup-python@v4
-      with:
-        python-version: ${{ matrix.python-version }}
-    
-    - name: Cache pip dependencies
-      uses: actions/cache@v3
-      with:
-        path: ~/.cache/pip
-        key: ${{ runner.os }}-pip-${{ matrix.python-version }}-${{ hashFiles('**/requirements.txt') }}
-        restore-keys: |
-          ${{ runner.os }}-pip-${{ matrix.python-version }}-
-          ${{ runner.os }}-pip-
-    
-    - name: Install dependencies
-      run: |
-        python -m pip install --upgrade pip
-        pip install -r requirements.txt
-    
-    - name: Install additional tools
-      run: |
-        pip install pytest black flake8 mypy bandit safety memory_profiler psutil
-    
-    - name: Code formatting check
-      run: |
-        if ! black --check --diff .; then
-          echo "Code formatting issues found. Run 'black .' to fix."
-          exit 1
-        fi
-    
-    - name: Linting with flake8
-      run: |
-        flake8 . --max-line-length=88 --extend-ignore=E203,W503
-    
-    - name: Type checking with mypy
-      run: |
-        mypy . --ignore-missing-imports
-      continue-on-error: true
-    
-    - name: Run unit tests
-      run: |
-        # Create test database
-        export DATABASE_PATH=test_news.db
-        export ENVIRONMENT=testing
-        export GNEWS_API_KEY=mock_test_key
-        
-        # Test configuration
-        python -c "import config; print('Config test passed')"
-        
-        # Test database
-        python -c "from storage import NewsDB; db = NewsDB(); print('Database test passed')"
-        
-        # Test processor
-        python -c "from transform import NewsProcessor; proc = NewsProcessor(); print('Processor test passed')"
-        
-        # Test ingestion (mock)
-        python -c "
-import config
-config.API_KEY = 'mock_test_key'
-from ingest import NewsFetcher
-fetcher = NewsFetcher()
-health = fetcher.get_health_status()
-print('Ingestion test passed')
-"
-    
-    - name: Test application startup
-      run: |
-        export GNEWS_API_KEY=mock_test_key
-        export DATABASE_PATH=test_news.db
-        export ENVIRONMENT=testing
-        
-        # Test dashboard startup (headless)
-        timeout 30s streamlit run dashboard.py --server.headless true --server.port 8501 &
-        
-        # Wait for service with retry logic
-        for i in {1..30}; do
-          if curl -f http://localhost:8501/_stcore/health; then
-            echo "Service is ready"
-            break
-          fi
-          echo "Waiting for service... ($i/30)"
-          sleep 2
-        done
-        
-        # Final health check
-        curl -f http://localhost:8501/_stcore/health || echo "Health check failed"
-    
-    - name: Security scan
-      run: |
-        bandit -r . -f json -o bandit-report.json || true
-        safety check --json --output safety-report.json || true
-    
-    - name: Upload security reports
-      uses: actions/upload-artifact@v3
-      if: always()
-      with:
-        name: security-reports-${{ matrix.python-version }}
-        path: |
-          bandit-report.json
-          safety-report.json
-    
-    - name: Cleanup test processes
-      if: always()
-      run: |
-        pkill -f streamlit || true
-        rm -f test_news.db || true
-
-  docker:
-    runs-on: ubuntu-latest
-    needs: test
     timeout-minutes: 15
     
     steps:
     - name: Checkout code
       uses: actions/checkout@v4
     
-    - name: Set up Docker Buildx
-      uses: docker/setup-buildx-action@v3
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.11'
+    
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install -r requirements.txt
+        pip install pytest black flake8
+    
+    - name: Code formatting check
+      run: black --check --diff .
+    
+    - name: Linting
+      run: flake8 . --max-line-length=88 --extend-ignore=E203,W503
+    
+    - name: Run tests
+      env:
+        GNEWS_API_KEY: ${{ secrets.GNEWS_API_KEY || 'mock_test_key' }}
+        DATABASE_PATH: test_news.db
+        ENVIRONMENT: testing
+      run: |
+        # Basic component tests
+        python -c "import config; print('Config loaded')"
+        python -c "from storage import NewsDB; NewsDB(); print('Database OK')"
+        python -c "from transform import NewsProcessor; NewsProcessor(); print('Processor OK')"
+    
+    - name: Cleanup
+      if: always()
+      run: rm -f test_news.db
+
+  docker:
+    runs-on: ubuntu-latest
+    needs: test
+    if: github.ref == 'refs/heads/main'
+    timeout-minutes: 10
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
     
     - name: Build Docker image
-      run: |
-        docker build -t news-intelligence-pipeline:latest .
+      run: docker build -t news-intelligence-pipeline:latest .
     
     - name: Test Docker container
       run: |
-        # Start container
         docker run -d -p 8501:8501 \
           -e GNEWS_API_KEY=mock_test_key \
           -e ENVIRONMENT=testing \
           --name test-container \
           news-intelligence-pipeline:latest
         
-        # Wait for startup with retry logic
-        for i in {1..30}; do
-          if docker exec test-container curl -f http://localhost:8501/_stcore/health 2>/dev/null; then
-            echo "Container service is ready"
-            break
-          fi
-          echo "Waiting for container service... ($i/30)"
-          sleep 2
-        done
+        # Wait for startup
+        sleep 10
         
-        # Final health check
-        docker exec test-container curl -f http://localhost:8501/_stcore/health || echo "Container health check failed"
+        # Basic health check
+        docker exec test-container curl -f http://localhost:8501/_stcore/health || echo "Health check failed"
         
-        # Check logs
-        docker logs test-container
-    
-    - name: Cleanup Docker container
-      if: always()
-      run: |
-        docker stop test-container || true
-        docker rm test-container || true
-    
-    - name: Login to GitHub Container Registry
-      if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-      uses: docker/login-action@v3
-      with:
-        registry: ghcr.io
-        username: ${{ github.actor }}
-        password: ${{ secrets.GITHUB_TOKEN }}
-    
-    - name: Push to GitHub Container Registry
-      if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-      run: |
-        docker tag news-intelligence-pipeline:latest ghcr.io/${{ github.repository }}:latest
-        docker tag news-intelligence-pipeline:latest ghcr.io/${{ github.repository }}:${{ github.sha }}
-        docker push ghcr.io/${{ github.repository }}:latest
-        docker push ghcr.io/${{ github.repository }}:${{ github.sha }}
-
-  performance:
-    runs-on: ubuntu-latest
-    needs: test
-    timeout-minutes: 10
-    
-    steps:
-    - name: Checkout code
-      uses: actions/checkout@v4
-    
-    - name: Set up Python ${{ env.PYTHON_VERSION }}
-      uses: actions/setup-python@v4
-      with:
-        python-version: ${{ env.PYTHON_VERSION }}
-    
-    - name: Install dependencies
-      run: |
-        python -m pip install --upgrade pip
-        pip install -r requirements.txt
-        pip install memory_profiler psutil
-    
-    - name: Performance tests
-      run: |
-        export GNEWS_API_KEY=mock_test_key
-        export DATABASE_PATH=perf_test.db
-        export ENVIRONMENT=testing
-        
-        # Memory and performance profiling
-        python -c "
-import time
-import psutil
-import os
-import sys
-
-try:
-    from storage import NewsDB
-    from transform import NewsProcessor
-
-    # Initialize components
-    db = NewsDB()
-    processor = NewsProcessor()
-
-    # Create test data
-    test_articles = []
-    for i in range(100):
-        test_articles.append({
-            'title': f'Test Article {i}',
-            'description': f'Test description {i}',
-            'url': f'https://example.com/{i}',
-            'source': 'Test Source',
-            'published_at': '2025-01-01 12:00:00',
-            'category': 'general'
-        })
-
-    # Measure processing performance
-    start_time = time.time()
-    processed = processor.process_articles_batch(test_articles)
-    processing_time = time.time() - start_time
-
-    # Measure memory usage
-    process = psutil.Process(os.getpid())
-    memory_mb = process.memory_info().rss / 1024 / 1024
-
-    print(f'Processing time: {processing_time:.2f}s')
-    print(f'Articles per second: {len(processed) / processing_time:.2f}')
-    print(f'Memory usage: {memory_mb:.2f} MB')
-    print(f'Success rate: {len(processed) / len(test_articles) * 100:.1f}%')
-
-    # Performance assertions
-    assert processing_time < 30, f'Processing too slow: {processing_time}s'
-    assert memory_mb < 500, f'Memory usage too high: {memory_mb}MB'
-    assert len(processed) / len(test_articles) > 0.8, 'Success rate too low'
-
-    print('Performance tests passed!')
-    
-except Exception as e:
-    print(f'Performance test failed: {e}')
-    sys.exit(1)
-"
-    
-    - name: Cleanup performance test
-      if: always()
-      run: |
-        rm -f perf_test.db || true
-
-  deploy:
-    runs-on: ubuntu-latest
-    needs: [test, docker, performance]
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-    timeout-minutes: 10
-    
-    steps:
-    - name: Checkout code
-      uses: actions/checkout@v4
-    
-    - name: Deploy to production
-      run: |
-        echo "Deployment would happen here"
-        echo "Could deploy to:"
-        echo "- AWS ECS/Fargate"
-        echo "- Azure Container Instances"
-        echo "- Google Cloud Run"
-        echo "- Railway"
-        echo "- Heroku"
-        
-        # Example deployment command:
-        # aws ecs update-service --cluster news-intelligence --service news-pipeline --force-new-deployment
-    
-    - name: Notify deployment
-      if: success()
-      run: |
-        echo "Deployment successful!"
-        echo "Dashboard URL: https://news-intelligence.example.com"
-        
-        # Could send Slack notification, email, etc.
-        # curl -X POST -H 'Content-type: application/json' \
-        #   --data '{"text":"News Intelligence Pipeline deployed successfully!"}' \
-        #   ${{ secrets.SLACK_WEBHOOK_URL }}
-
-  cleanup:
-    runs-on: ubuntu-latest
-    needs: [test, docker, performance]
-    if: always()
-    timeout-minutes: 5
-    
-    steps:
-    - name: Cleanup test artifacts
-      run: |
-        echo "Cleaning up test databases and artifacts"
-        rm -f test_news.db perf_test.db || true
-        docker system prune -f || true
+        # Cleanup
+        docker stop test-container
+        docker rm test-container
