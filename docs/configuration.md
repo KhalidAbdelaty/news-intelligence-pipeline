@@ -6,7 +6,7 @@
 
 | Variable | Description | Example |
 |----------|-------------|---------|
-| `GNEWS_API_KEY` | GNews API authentication key | `86ce66a3c06ea6a6a4a6fa14e290f092` |
+| `GNEWS_API_KEY` | GNews API authentication key | `86ce66a3c06ea6a6a40000000000` |
 
 ### Core Configuration
 
