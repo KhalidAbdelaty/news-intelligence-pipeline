@@ -1,0 +1,41 @@
+version: '3.8'
+
+services:
+  news-intelligence:
+    build: .
+    ports:
+      - "8501:8501"
+    environment:
+      - ENVIRONMENT=production
+      - LOG_LEVEL=INFO
+      - GNEWS_API_KEY=${GNEWS_API_KEY}
+      - DATABASE_PATH=/app/data/news.db
+      - REALTIME_ENABLED=true
+      - MAX_ARTICLES_PER_RUN=500
+    volumes:
+      - ./data:/app/data
+      - ./logs:/app/logs
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8501/_stcore/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    depends_on:
+      - postgres
+
+  postgres:
+    image: postgres:15
+    environment:
+      - POSTGRES_DB=news_intelligence
+      - POSTGRES_USER=news_user
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+    restart: unless-stopped
+
+volumes:
+  postgres_data:
