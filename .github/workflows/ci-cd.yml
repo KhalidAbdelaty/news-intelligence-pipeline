@@ -28,7 +28,14 @@ jobs:
         pip install pytest black flake8
     
     - name: Code formatting check
-      run: black --check --diff .
+      run: |
+        # Check if there are any Python files first
+        if find . -name "*.py" -not -path "./.git/*" -not -path "./.venv/*" -not -path "./venv/*" | grep -q .; then
+          echo "Checking Python files with Black..."
+          find . -name "*.py" -not -path "./.git/*" -not -path "./.venv/*" -not -path "./venv/*" | xargs black --check --diff
+        else
+          echo "No Python files found to check"
+        fi
     
     - name: Linting
       run: flake8 . --max-line-length=88 --extend-ignore=E203,W503
